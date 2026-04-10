@@ -1,0 +1,10 @@
+# Ignore local environment
+venv/
+__pycache__/
+*.pth
+.vscode/
+
+# Ignore local data
+data/
+results_comparison_image_0.png
+temp.txt

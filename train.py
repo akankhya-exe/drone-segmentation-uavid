@@ -6,76 +6,92 @@ import cv2
 import numpy as np
 import segmentation_models_pytorch as smp
 from models.custom_unet import CustomAtrousECAUNet
-
+import glob
+import random
+import torchvision.transforms.functional as TF
 
 def set_seed(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
-    import random
     random.seed(seed)
-    # This makes the training deterministic (but might slow it down slightly)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# --- THE "SWITCHBOARD" ---
-MODEL_TYPE = "CUSTOM"  # Change this to "CUSTOM" after the first run
-EPOCHS = 20
-BATCH_SIZE = 4 
-VAL_IMAGES = ["000800", "000900"] # We'll hide these from the training
+MODEL_TYPE = "CUSTOM"  
+EPOCHS = 50           
+BATCH_SIZE = 8         
+LEARNING_RATE = 1e-4
 
 class UAVidDataset(Dataset):
-    def __init__(self, img_dir, mask_dir, mode="train"):
-        self.img_dir = img_dir
-        self.mask_dir = mask_dir
-        # Get all patch filenames
-        all_patches = [p for p in os.listdir(img_dir) if p.endswith('.png')]
+    def __init__(self, base_dir, mode="train", transform=True):
+        self.mode = mode
+        self.transform = transform
         
-        # LOGICAL SPLIT: Filter patches based on the original image number in the name
-        if mode == "train":
-            self.images = [p for p in all_patches if not any(v in p for v in VAL_IMAGES)]
-        else:
-            self.images = [p for p in all_patches if any(v in p for v in VAL_IMAGES)]
+        self.image_paths = sorted(glob.glob(os.path.join(base_dir, mode, "seq*", "Images", "*.png")))
+        self.mask_paths = sorted(glob.glob(os.path.join(base_dir, mode, "seq*", "Labels", "*.png")))
+        
+        if len(self.image_paths) == 0:
+            raise RuntimeError(f"Found 0 images in {base_dir}. Check your pathing!")
 
-    def __len__(self): return len(self.images)
+    def __len__(self):
+        return len(self.image_paths)
+
+    def augment(self, image, mask):
+        # Horizontal flip
+        if random.random() > 0.5:
+            image = TF.hflip(image)
+            mask = TF.hflip(mask)
+        # Vertical flip
+        if random.random() > 0.5:
+            image = TF.vflip(image)
+            mask = TF.vflip(mask)
+        return image, mask
 
     def __getitem__(self, idx):
-        img_name = self.images[idx]
-        img = cv2.imread(os.path.join(self.img_dir, img_name))
+        img = cv2.imread(self.image_paths[idx])
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(os.path.join(self.mask_dir, img_name), cv2.IMREAD_GRAYSCALE)
+        mask = cv2.imread(self.mask_paths[idx], cv2.IMREAD_GRAYSCALE)
         
-        # Normalize and convert to Tensor
         img = np.transpose(img, (2, 0, 1)).astype(np.float32) / 255.0
-        return torch.tensor(img), torch.tensor(mask).long()
+        img_tensor = torch.tensor(img)
+        mask_tensor = torch.tensor(mask).long()
+
+        if self.mode == "train" and self.transform:
+            img_tensor, mask_tensor = self.augment(img_tensor, mask_tensor)
+
+        return img_tensor, mask_tensor
 
 def main():
     set_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    save_path = f"best_model_{MODEL_TYPE.lower()}.pth"
-
-    # 1. Setup the split loaders
-    train_ds = UAVidDataset("data/patches/images", "data/patches/labels", mode="train")
-    val_ds = UAVidDataset("data/patches/images", "data/patches/labels", mode="val")
     
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    save_dir = "/content/drive/MyDrive/drone_model_checkpoints"
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"best_model_{MODEL_TYPE.lower()}.pth")
 
-    # 2. Pick the Model
+    data_root = "/content/data" 
+    train_ds = UAVidDataset(data_root, mode="train", transform=True)
+    val_ds = UAVidDataset(data_root, mode="val", transform=False)
+    
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
+
     if MODEL_TYPE == "BASELINE":
-        model = smp.Unet(encoder_name="resnet18", encoder_weights=None, in_channels=3, classes=4).to(device)
+        model = smp.Unet(encoder_name="resnet18", encoder_weights="imagenet", in_channels=3, classes=4).to(device)
     else:
         model = CustomAtrousECAUNet(in_channels=3, classes=4).to(device)
 
-    # 3. Loss & Optimizer (Focal + Dice)
-    focal_loss = smp.losses.FocalLoss(mode='multiclass')
-    dice_loss = smp.losses.DiceLoss(mode='multiclass')
-    criterion = lambda out, m: focal_loss(out, m) + dice_loss(out, m)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    criterion = lambda out, m: smp.losses.FocalLoss(mode='multiclass')(out, m) + \
+                               smp.losses.DiceLoss(mode='multiclass')(out, m)
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
 
-    print(f"RUNNING: {MODEL_TYPE} | Training on {len(train_ds)} patches | Validating on {len(val_ds)} patches")
+    print(f"STARTING TRAINING: {MODEL_TYPE}")
+    print(f"Train samples: {len(train_ds)} | Val samples: {len(val_ds)}")
 
-    best_loss = float('inf')
+    best_v_loss = float('inf')
     for epoch in range(EPOCHS):
         model.train()
         t_loss = 0
@@ -87,7 +103,6 @@ def main():
             optimizer.step()
             t_loss += loss.item()
 
-        # Validation Check
         model.eval()
         v_loss = 0
         with torch.no_grad():
@@ -97,12 +112,15 @@ def main():
 
         avg_t = t_loss/len(train_loader)
         avg_v = v_loss/len(val_loader)
-        print(f"Epoch {epoch+1}/{EPOCHS} | Train: {avg_t:.4f} | Val: {avg_v:.4f}")
+        
+        scheduler.step(avg_v)
+        
+        print(f"Epoch {epoch+1}/{EPOCHS} | Train Loss: {avg_t:.4f} | Val Loss: {avg_v:.4f} | LR: {optimizer.param_groups[0]['lr']}")
 
-        if avg_v < best_loss:
-            best_loss = avg_v
+        if avg_v < best_v_loss:
+            best_v_loss = avg_v
             torch.save(model.state_dict(), save_path)
-            print(f" >>> Saved {MODEL_TYPE} weights!")
+            print(f" >>> New Best Model Saved to Drive!")
 
 if __name__ == "__main__":
     main()

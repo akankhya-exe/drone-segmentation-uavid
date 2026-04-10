@@ -8,59 +8,42 @@ import segmentation_models_pytorch as smp
 from models.custom_unet import CustomAtrousECAUNet
 import glob
 import random
-import torchvision.transforms.functional as TF
 
-def set_seed(seed=42):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+from utils.tools import rgb2label, seed
+
+def set_seed(seed_num=42):
+    seed(seed_num)
 
 MODEL_TYPE = "CUSTOM"  
-EPOCHS = 50           
+EPOCHS = 50            
 BATCH_SIZE = 8         
 LEARNING_RATE = 1e-4
 
 class UAVidDataset(Dataset):
-    def __init__(self, base_dir, mode="train", transform=True):
+    def __init__(self, base_dir, mode="train"):
         self.mode = mode
-        self.transform = transform
         
-        self.image_paths = sorted(glob.glob(os.path.join(base_dir, mode, "seq*", "Images", "*.png")))
-        self.mask_paths = sorted(glob.glob(os.path.join(base_dir, mode, "seq*", "Labels", "*.png")))
+        self.image_paths = sorted(glob.glob(os.path.join(base_dir, f"uavid_{mode}", "seq*", "Images", "*.png")))
+        self.mask_paths = sorted(glob.glob(os.path.join(base_dir, f"uavid_{mode}", "seq*", "Labels", "*.png")))
         
         if len(self.image_paths) == 0:
-            raise RuntimeError(f"Found 0 images in {base_dir}. Check your pathing!")
+            raise RuntimeError(f"Found 0 images in {base_dir}/uavid_{mode}. Check your pathing!")
 
     def __len__(self):
         return len(self.image_paths)
 
-    def augment(self, image, mask):
-        # Horizontal flip
-        if random.random() > 0.5:
-            image = TF.hflip(image)
-            mask = TF.hflip(mask)
-        # Vertical flip
-        if random.random() > 0.5:
-            image = TF.vflip(image)
-            mask = TF.vflip(mask)
-        return image, mask
-
     def __getitem__(self, idx):
         img = cv2.imread(self.image_paths[idx])
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(self.mask_paths[idx], cv2.IMREAD_GRAYSCALE)
+        
+        mask_bgr = cv2.imread(self.mask_paths[idx])
+        mask_rgb = cv2.cvtColor(mask_bgr, cv2.COLOR_BGR2RGB)
+        
+        mask_idx = rgb2label(mask_rgb)
         
         img = np.transpose(img, (2, 0, 1)).astype(np.float32) / 255.0
-        img_tensor = torch.tensor(img)
-        mask_tensor = torch.tensor(mask).long()
-
-        if self.mode == "train" and self.transform:
-            img_tensor, mask_tensor = self.augment(img_tensor, mask_tensor)
-
-        return img_tensor, mask_tensor
+        
+        return torch.tensor(img), torch.tensor(mask_idx).long()
 
 def main():
     set_seed(42)
@@ -71,8 +54,8 @@ def main():
     save_path = os.path.join(save_dir, f"best_model_{MODEL_TYPE.lower()}.pth")
 
     data_root = "/content/data" 
-    train_ds = UAVidDataset(data_root, mode="train", transform=True)
-    val_ds = UAVidDataset(data_root, mode="val", transform=False)
+    train_ds = UAVidDataset(data_root, mode="train")
+    val_ds = UAVidDataset(data_root, mode="val")
     
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)

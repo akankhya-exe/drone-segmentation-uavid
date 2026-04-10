@@ -18,6 +18,7 @@ MODEL_TYPE = "CUSTOM"
 EPOCHS = 50            
 BATCH_SIZE = 8         
 LEARNING_RATE = 1e-4
+IMAGE_SIZE = (512, 512)
 
 class UAVidDataset(Dataset):
     def __init__(self, base_dir, mode="train"):
@@ -38,6 +39,9 @@ class UAVidDataset(Dataset):
         
         mask_bgr = cv2.imread(self.mask_paths[idx])
         mask_rgb = cv2.cvtColor(mask_bgr, cv2.COLOR_BGR2RGB)
+
+        img = cv2.resize(img, IMAGE_SIZE, interpolation=cv2.INTER_LINEAR)
+        mask_rgb = cv2.resize(mask_rgb, IMAGE_SIZE, interpolation=cv2.INTER_NEAREST)
         
         mask_idx = rgb2label(mask_rgb)
         

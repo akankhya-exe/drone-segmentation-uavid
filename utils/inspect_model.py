@@ -1,6 +1,8 @@
 import segmentation_models_pytorch as smp
 from torchinfo import summary
 
+'''Script to analyze paramters for each model'''
+
 def main():
     model = smp.Unet(
         encoder_name="resnet18",

@@ -14,6 +14,7 @@ from utils.tools import rgb2label, seed
 def set_seed(seed_num=42):
     seed(seed_num)
 
+# Switchboard for training models
 MODEL_TYPE = "CUSTOM"  
 EPOCHS = 50            
 BATCH_SIZE = 8         
@@ -23,9 +24,15 @@ IMAGE_SIZE = (512, 512)
 class UAVidDataset(Dataset):
     def __init__(self, base_dir, mode="train"):
         self.mode = mode
+
+        img_pattern = os.path.join(base_dir, "**", f"uavid_{mode}", "seq*", "Images", "*.png")
+        mask_pattern = os.path.join(base_dir, "**", f"uavid_{mode}", "seq*", "Labels", "*.png")
         
-        self.image_paths = sorted(glob.glob(os.path.join(base_dir, f"uavid_{mode}", "seq*", "Images", "*.png")))
-        self.mask_paths = sorted(glob.glob(os.path.join(base_dir, f"uavid_{mode}", "seq*", "Labels", "*.png")))
+        self.image_paths = sorted(glob.glob(img_pattern, recursive=True))
+        self.mask_paths = sorted(glob.glob(mask_pattern, recursive=True))
+        
+        # self.image_paths = sorted(glob.glob(os.path.join(base_dir, f"uavid_{mode}", "seq*", "Images", "*.png")))
+        # self.mask_paths = sorted(glob.glob(os.path.join(base_dir, f"uavid_{mode}", "seq*", "Labels", "*.png")))
         
         if len(self.image_paths) == 0:
             raise RuntimeError(f"Found 0 images in {base_dir}/uavid_{mode}. Check your pathing!")
@@ -53,21 +60,25 @@ def main():
     set_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    save_dir = "/content/drive/MyDrive/drone_model_checkpoints"
+    save_dir = "weights" # "/content/drive/MyDrive/drone_model_checkpoints"
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"best_model_{MODEL_TYPE.lower()}.pth")
 
-    data_root = "/content/data" 
+    data_root = "data" # "/content/data" 
     train_ds = UAVidDataset(data_root, mode="train")
     val_ds = UAVidDataset(data_root, mode="val")
     
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
 
-    if MODEL_TYPE == "BASELINE":
-        model = smp.Unet(encoder_name="resnet18", encoder_weights="imagenet", in_channels=3, classes=4).to(device)
-    else:
+    if MODEL_TYPE in ["BASELINE", "BASELINE_SCRATCH"]:
+        # Uses ImageNet weights for Baseline, and None for Scratch
+        weights = "imagenet" if MODEL_TYPE == "BASELINE" else None
+        model = smp.Unet(encoder_name="resnet18", encoder_weights=weights, in_channels=3, classes=4).to(device)
+    elif MODEL_TYPE == "CUSTOM":
         model = CustomAtrousECAUNet(in_channels=3, classes=4).to(device)
+    else:
+        raise ValueError("MODEL_TYPE must be 'BASELINE', 'BASELINE_SCRATCH', or 'CUSTOM'")
 
     criterion = lambda out, m: smp.losses.FocalLoss(mode='multiclass')(out, m) + \
                                smp.losses.DiceLoss(mode='multiclass')(out, m)

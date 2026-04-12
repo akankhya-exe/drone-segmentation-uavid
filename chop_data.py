@@ -6,6 +6,8 @@ import numpy as np
 import albumentations as albu
 from utils.tools import rgb2label, seed
 
+'''Converts images to patches for processing batch-wise'''
+
 # Directories
 INPUT_IMG_DIR = "data/raw_images"
 INPUT_MASK_DIR = "data/raw_labels"
@@ -64,10 +66,10 @@ def main():
                     # Convert image back to BGR for saving
                     img_tile = cv2.cvtColor(img_tile, cv2.COLOR_RGB2BGR)
                     cv2.imwrite(out_img_name, img_tile)
-                    cv2.imwrite(out_mask_name, mask_tile)
+                    cv2.imwrite(out_mask_name, mask_tile.astype(np.uint8))
                     k += 1
         
-        print("\nChopping complete! Check your data/patches folders.")
+    print("\nChopping complete! Check your data/patches folders.")
         
 
 if __name__ == "__main__":

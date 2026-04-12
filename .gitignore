@@ -1,10 +1,22 @@
-# Ignore local environment
+# Python / Editor Environments
 venv/
 __pycache__/
-*.pth
 .vscode/
+.ipynb_checkpoints/
 
-# Ignore local data
-data/
+# Massive ML Files (Never commit these!)
+*.pth
+
+# Local outputs / Junk
 results_comparison_image_0.png
 temp.txt
+
+# --- THE FOLDER SHIELDS ---
+
+# 1. Ignore all data, but keep the empty folder structure
+data/*
+!data/.gitkeep
+
+# 2. Ignore local weights, but keep the empty folder structure
+weights/*
+!weights/.gitkeep
